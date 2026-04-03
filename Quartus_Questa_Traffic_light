@@ -1,0 +1,75 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity traffic_light is
+    port (
+        clk      : in  std_logic;
+        reset    : in  std_logic;
+        road1    : out std_logic_vector(2 downto 0);
+        road2    : out std_logic_vector(2 downto 0)
+    );
+end traffic_light;
+
+architecture Behavioral of traffic_light is
+
+    signal div_count : integer range 0 to 9 := 0;
+    signal slow_clk  : std_logic := '0';
+
+    type state_type is (S1_GREEN, S1_YELLOW, S2_GREEN, S2_YELLOW);
+    signal state : state_type := S1_GREEN;
+
+begin
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            div_count <= 0;
+            slow_clk <= '0';
+        elsif rising_edge(clk) then
+            if div_count = 9 then
+                div_count <= 0;
+                slow_clk <= not slow_clk;
+            else
+                div_count <= div_count + 1;
+            end if;
+        end if;
+    end process;
+
+
+    process(slow_clk, reset)
+    begin
+        if reset = '1' then
+            state <= S1_GREEN;
+        elsif rising_edge(slow_clk) then
+            case state is
+                when S1_GREEN  => state <= S1_YELLOW;
+                when S1_YELLOW => state <= S2_GREEN;
+                when S2_GREEN  => state <= S2_YELLOW;
+                when S2_YELLOW => state <= S1_GREEN;
+            end case;
+        end if;
+    end process;
+
+    -- Выходы светофора
+    process(state)
+    begin
+        case state is
+            when S1_GREEN =>
+                road1 <= "001";  -- Зелёный
+                road2 <= "100";  -- Красный
+
+            when S1_YELLOW =>
+                road1 <= "010";  -- Жёлтый
+                road2 <= "100";  -- Красный
+
+            when S2_GREEN =>
+                road1 <= "100";  -- Красный
+                road2 <= "001";  -- Зелёный
+
+            when S2_YELLOW =>
+                road1 <= "100";  -- Красный
+                road2 <= "010";  -- Жёлтый
+        end case;
+    end process;
+
+end Behavioral;
