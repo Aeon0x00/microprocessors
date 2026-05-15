@@ -1,0 +1,294 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : MPU6050 - определение движения и вывод в UART
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+#include "main.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* ========== Адрес MPU6050 ========== */
+#define MPU6050_ADDR              0xD0
+
+/* ========== Регистры MPU6050 ========== */
+#define MPU6050_WHO_AM_I          0x75
+#define MPU6050_PWR_MGMT_1        0x6B
+#define MPU6050_SMPLRT_DIV        0x19
+#define MPU6050_ACCEL_CONFIG      0x1C
+#define MPU6050_GYRO_CONFIG       0x1B
+#define MPU6050_ACCEL_XOUT_H      0x3B
+#define MPU6050_GYRO_XOUT_H       0x43
+
+/* ========== Порог движения ========== */
+/* 16384 = 1g. Порог 3000 ≈ 0.18g     */
+/* Увеличь если слишком чувствительно  */
+/* Уменьши если не реагирует           */
+#define THRESHOLD                 3000
+
+/* ========== Дескрипторы периферии ========== */
+I2C_HandleTypeDef hi2c1;
+UART_HandleTypeDef huart1;
+
+/* ========== Прототипы ========== */
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
+void MPU6050_Init(void);
+void UART_Print(const char *msg);
+
+/* ========== Вспомогательная функция вывода ========== */
+void UART_Print(const char *msg)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 200);
+}
+
+/* ========== Инициализация MPU6050 ========== */
+void MPU6050_Init(void)
+{
+    uint8_t check = 0;
+    uint8_t data = 0;
+    char str[60];
+
+    /* Читаем WHO_AM_I — должно вернуть 0x68 = 104 */
+    HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR,
+        MPU6050_WHO_AM_I, 1, &check, 1, 1000);
+
+    if (check == 104)
+    {
+        /* Будим датчик */
+        data = 0x00;
+        HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR,
+            MPU6050_PWR_MGMT_1, 1, &data, 1, 1000);
+
+        /* Частота сэмплирования 1 кГц */
+        data = 0x07;
+        HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR,
+            MPU6050_SMPLRT_DIV, 1, &data, 1, 1000);
+
+        /* Акселерометр +-2g */
+        data = 0x00;
+        HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR,
+            MPU6050_ACCEL_CONFIG, 1, &data, 1, 1000);
+
+        /* Гироскоп +-250 град/с */
+        data = 0x00;
+        HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR,
+            MPU6050_GYRO_CONFIG, 1, &data, 1, 1000);
+
+        UART_Print("MPU6050: OK! Датчик готов.\r\n");
+    }
+    else
+    {
+        snprintf(str, sizeof(str),
+            "MPU6050: ОШИБКА! WHO_AM_I=0x%02X (ожидалось 0x68)\r\n", check);
+        UART_Print(str);
+    }
+}
+
+/* ========== MAIN ========== */
+int main(void)
+{
+    /* USER CODE BEGIN 1 */
+    int16_t Accel_X = 0;
+    int16_t Accel_Y = 0;
+    int16_t Accel_Z = 0;
+
+    uint8_t Rec_Data[6] = {0};
+    char str[100];
+    uint8_t motion = 0;
+    /* USER CODE END 1 */
+
+    HAL_Init();
+    SystemClock_Config();
+
+    MX_GPIO_Init();
+    MX_I2C1_Init();
+    MX_USART1_UART_Init();
+
+    /* USER CODE BEGIN 2 */
+    HAL_Delay(200);
+
+    UART_Print("\r\n=== МОНИТОРИНГ ДВИЖЕНИЯ MPU6050 ===\r\n");
+    UART_Print("Инициализация датчика...\r\n");
+
+    MPU6050_Init();
+
+    UART_Print("Начинаю опрос датчика...\r\n\r\n");
+    /* USER CODE END 2 */
+
+    /* USER CODE BEGIN WHILE */
+    while (1)
+    {
+        /* --- Читаем 6 байт акселерометра --- */
+        HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR,
+            MPU6050_ACCEL_XOUT_H, 1, Rec_Data, 6, 1000);
+
+        /* --- Собираем 16-битные значения --- */
+        Accel_X = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
+        Accel_Y = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);
+        Accel_Z = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+
+        /* --- Сбрасываем флаг движения --- */
+        motion = 0;
+
+        /* --- Проверяем ось X --- */
+        if (Accel_X > THRESHOLD)
+        {
+            motion = 1;
+            snprintf(str, sizeof(str),
+                "[ДВИЖЕНИЕ] >>> ВПЕРЁД  | X=%6d Y=%6d Z=%6d\r\n",
+                Accel_X, Accel_Y, Accel_Z);
+            UART_Print(str);
+        }
+        else if (Accel_X < -THRESHOLD)
+        {
+            motion = 1;
+            snprintf(str, sizeof(str),
+                "[ДВИЖЕНИЕ] <<< НАЗАД   | X=%6d Y=%6d Z=%6d\r\n",
+                Accel_X, Accel_Y, Accel_Z);
+            UART_Print(str);
+        }
+
+        /* --- Проверяем ось Y --- */
+        if (Accel_Y > THRESHOLD)
+        {
+            motion = 1;
+            snprintf(str, sizeof(str),
+                "[ДВИЖЕНИЕ] >>> ВПРАВО  | X=%6d Y=%6d Z=%6d\r\n",
+                Accel_X, Accel_Y, Accel_Z);
+            UART_Print(str);
+        }
+        else if (Accel_Y < -THRESHOLD)
+        {
+            motion = 1;
+            snprintf(str, sizeof(str),
+                "[ДВИЖЕНИЕ] <<< ВЛЕВО   | X=%6d Y=%6d Z=%6d\r\n",
+                Accel_X, Accel_Y, Accel_Z);
+            UART_Print(str);
+        }
+
+        /* --- Если нет движения --- */
+        if (!motion)
+        {
+            snprintf(str, sizeof(str),
+                "[ПОКОЙ]                | X=%6d Y=%6d Z=%6d\r\n",
+                Accel_X, Accel_Y, Accel_Z);
+            UART_Print(str);
+        }
+
+        /* --- Светодиод PC13 (инвертирован на Blue Pill) --- */
+        if (motion)
+        {
+            /* Мигаем при движении */
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+            HAL_Delay(100);
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+            HAL_Delay(100);
+        }
+        else
+        {
+            /* Выключен в покое */
+            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+            HAL_Delay(200);
+        }
+    }
+    /* USER CODE END WHILE */
+}
+
+/* ========== СИСТЕМНЫЕ ФУНКЦИИ (не трогай) ========== */
+
+void SystemClock_Config(void)
+{
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+                                | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+static void MX_I2C1_Init(void)
+{
+    hi2c1.Instance = I2C1;
+    hi2c1.Init.ClockSpeed = 100000;
+    hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+    hi2c1.Init.OwnAddress1 = 0;
+    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c1.Init.OwnAddress2 = 0;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+static void MX_USART1_UART_Init(void)
+{
+    huart1.Instance = USART1;
+    huart1.Init.BaudRate = 115200;
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits = UART_STOPBITS_2;
+    huart1.Init.Parity = UART_PARITY_NONE;
+    huart1.Init.Mode = UART_MODE_TX_RX;
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+    if (HAL_UART_Init(&huart1) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+static void MX_GPIO_Init(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_13;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+}
+
+void Error_Handler(void)
+{
+    __disable_irq();
+    while (1) {}
+}
+
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif
